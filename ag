@@ -1,0 +1,711 @@
+-- logic.lua | Glory Engine
+-- This file goes on GitHub. It reads getgenv()["Glory"] set by the user's config.lua
+
+local glory = getgenv()["Glory"]
+assert(glory, "[Glory] Config not found. Run config.lua first.")
+
+local core     = glory["Core"]                or {}
+local checks   = core["Checks"]               or {}
+local keybinds = core["Keybinds"]             or {}
+local sa       = glory["Silent Aim"]          or {}
+local cl       = glory["Camlock"]             or {}
+local tb       = glory["Trigger Bot"]         or {}
+local espCfg   = glory["ESP"]                 or {}
+local cm       = glory["Character Modifiers"] or {}
+local wm       = glory["Weapon Modifiers"]    or {}
+
+-- ============================================================================
+-- KEY SYSTEM
+-- ============================================================================
+do
+    local Http    = game:GetService("HttpService")
+    local userKey = tostring(core["Script Key"] or "")
+    assert(userKey ~= "", "[Glory] No key set in config.")
+
+    local function getHWID()
+        if gethwid then local ok, id = pcall(gethwid); if ok and id ~= "" then return tostring(id) end end
+        local ok, id = pcall(function() return game:GetService("RbxAnalyticsService"):GetClientId() end)
+        if ok and id ~= "" then return tostring(id) end
+        return "unknown-" .. tostring(game.PlaceId)
+    end
+
+    local name    = "Glory"
+    local ownerid = "QjVh1EVVyn"
+    local version = "1.0"
+    local hwid    = getHWID()
+
+    local ok, res = pcall(request, {
+        Url = "https://keyauth.win/api/1.2/", Method = "POST",
+        Headers = {["Content-Type"] = "application/x-www-form-urlencoded"},
+        Body = "type=init&ver="..version.."&name="..Http:UrlEncode(name).."&ownerid="..ownerid,
+    })
+    assert(ok and res, "[Glory] KeyAuth init failed.")
+    local initData; pcall(function() initData = Http:JSONDecode(res.Body) end)
+    assert(initData and initData.sessionid, "[Glory] KeyAuth init error: "..(initData and initData.message or "no response"))
+
+    local ok2, res2 = pcall(request, {
+        Url = "https://keyauth.win/api/1.2/", Method = "POST",
+        Headers = {["Content-Type"] = "application/x-www-form-urlencoded"},
+        Body = "type=license&key="..Http:UrlEncode(userKey).."&hwid="..Http:UrlEncode(hwid)
+             .."&sessionid="..initData.sessionid.."&name="..Http:UrlEncode(name).."&ownerid="..ownerid,
+    })
+    assert(ok2 and res2, "[Glory] Key check failed.")
+    local authData; pcall(function() authData = Http:JSONDecode(res2.Body) end)
+    assert(authData and authData.success, "[Glory] "..(authData and authData.message or "Invalid key."))
+end
+
+-- ============================================================================
+-- SERVICES
+-- ============================================================================
+local Players          = game:GetService("Players")
+local UserInputService = game:GetService("UserInputService")
+local RunService       = game:GetService("RunService")
+local Workspace        = game:GetService("Workspace")
+
+local LocalPlayer = Players.LocalPlayer
+repeat task.wait() until LocalPlayer.Character
+local Mouse  = LocalPlayer:GetMouse()
+local Camera = Workspace.CurrentCamera
+
+local sqrt   = math.sqrt
+local huge   = math.huge
+local max    = math.max
+local clamp  = math.clamp
+local abs    = math.abs
+local V2     = Vector2.new
+local V3     = Vector3.new
+local CF     = CFrame.new
+
+-- ============================================================================
+-- STATE
+-- ============================================================================
+local CurrentTarget     = nil
+local SelectedTarget    = nil
+local SilentAimActive   = false
+local ESPLabels         = {}
+local SpeedEnabled      = false
+local BaseSpeed         = 16
+local TriggerBotActive  = false
+local LastTriggerShot   = 0
+local CamLockActive     = false
+local CamLockTarget     = nil
+local SuperJumpActive   = false
+local SuperJumpCooldown = false
+local isMouseDown       = false
+
+local IS_ACCURACY = game.PlaceId == 110753873913806
+
+local CachedPing = 0.05
+local LastPingT  = 0
+local function GetPing()
+    local now = tick()
+    if now - LastPingT > 2 then
+        LastPingT = now
+        pcall(function()
+            CachedPing = game:GetService("Stats").Network.ServerStatsItem["Data Ping"]:GetValue() / 1000
+        end)
+        if CachedPing < 0.01 then CachedPing = 0.03 end
+    end
+    return CachedPing
+end
+
+local RayParams = RaycastParams.new()
+RayParams.FilterType  = Enum.RaycastFilterType.Exclude
+RayParams.IgnoreWater = true
+
+local TargetTracer = Drawing.new("Line")
+TargetTracer.Visible = false; TargetTracer.Thickness = 0.1
+TargetTracer.Color = Color3.fromRGB(0,0,255); TargetTracer.Transparency = 1; TargetTracer.ZIndex = 999
+
+-- ============================================================================
+-- HELPERS
+-- ============================================================================
+local function PlayerDead(p)
+    if not p.Character then return true end
+    local be = p.Character:FindFirstChild("BodyEffects")
+    if be then
+        local d = be:FindFirstChild("Dead"); if d and d.Value then return true end
+        local k = be:FindFirstChild("K.O");  if k and k.Value then return true end
+    end
+    local h = p.Character:FindFirstChildOfClass("Humanoid")
+    return h and h.Health <= 0
+end
+
+local function PlayerKnocked(p)
+    if not checks["Knocked"] then return false end
+    if not p.Character then return false end
+    local be = p.Character:FindFirstChild("BodyEffects")
+    if be then local k = be:FindFirstChild("K.O"); if k and k.Value then return true end end
+    return false
+end
+
+local function HoldingKnife()
+    if not checks["Knife"] then return false end
+    local char = LocalPlayer.Character; if not char then return false end
+    local tool = char:FindFirstChildOfClass("Tool")
+    return tool and tool.Name == "[Knife]"
+end
+
+local function IsChatOpen() return UserInputService:GetFocusedTextBox() ~= nil end
+
+local function CanSee(part)
+    if not checks["Visible"] then return true end
+    if not part or not part.Parent then return false end
+    RayParams.FilterDescendantsInstances = {LocalPlayer.Character, part.Parent}
+    local result = Workspace:Raycast(Camera.CFrame.Position, part.Position - Camera.CFrame.Position, RayParams)
+    return result == nil or result.Instance:IsDescendantOf(part.Parent)
+end
+
+local function GetClosestBodyPart(char, mp)
+    local best, bd = nil, huge
+    for _, name in ipairs({"Head","HumanoidRootPart","UpperTorso","LowerTorso"}) do
+        local part = char:FindFirstChild(name)
+        if part then
+            local sp, on = Camera:WorldToViewportPoint(part.Position)
+            local d = (not on or sp.Z <= 0) and 999999 or sqrt((sp.X-mp.X)^2+(sp.Y-mp.Y)^2)
+            if d < bd then bd = d; best = part end
+        end
+    end
+    return best
+end
+
+local function GetTargetPart(char, mp)
+    local hp = (sa["Hit Location"] or {})["Hit Part"] or "Closest Point"
+    if hp == "Head"          then return char:FindFirstChild("Head")
+    elseif hp == "HumanoidRootPart" then return char:FindFirstChild("HumanoidRootPart")
+    elseif hp == "UpperTorso" then return char:FindFirstChild("UpperTorso") or char:FindFirstChild("Torso")
+    else return GetClosestBodyPart(char, mp) end
+end
+
+local function IsAirborne(char)
+    if not char then return false end
+    local h = char:FindFirstChildOfClass("Humanoid"); if not h then return false end
+    local s = h:GetState()
+    if s == Enum.HumanoidStateType.Freefall or s == Enum.HumanoidStateType.Flying or s == Enum.HumanoidStateType.Jumping then return true end
+    local hrp = char:FindFirstChild("HumanoidRootPart")
+    return hrp and abs((hrp.AssemblyLinearVelocity or hrp.Velocity).Y) > 5
+end
+
+local function GetPredicted(part, char)
+    if not part or not part:IsA("BasePart") then return part.Position end
+    local vel  = part.AssemblyLinearVelocity or part.Velocity
+    local ping = GetPing()
+    local dist = (part.Position - Camera.CFrame.Position).Magnitude
+    local pred = 0.13 * max(dist/50, 0.4) + ping
+    local grav = V3(0,0,0)
+    if IsAirborne(char) then
+        pred = pred * 1.4
+        grav = V3(0, -0.5 * (Workspace.Gravity or 196.2) * pred^2, 0)
+    end
+    return part.Position + vel * pred + grav
+end
+
+-- ============================================================================
+-- TARGET FINDING
+-- ============================================================================
+local function FindClosestToMouse(ignoreFOV)
+    if HoldingKnife() then return nil end
+    local mp   = UserInputService:GetMouseLocation()
+    local fov  = sa["FOV"] or {}
+    local fovOn = fov["Enabled"] and not ignoreFOV
+    local fovSz = fovOn and (fov["Show FOV"] and 20 or 20) or huge
+    -- use actual FOV size from config
+    if fovOn then
+        local t = fov["Type"] or "2D"
+        if t == "2D" then fovSz = ((fov["2D"] or {})["X"] or 20)
+        else fovSz = ((fov["3D"] or {})["X"] or 12) end
+    end
+    local best, bd = nil, huge
+    for _, p in pairs(Players:GetPlayers()) do
+        if p == LocalPlayer or not p.Character then continue end
+        local head = p.Character:FindFirstChild("Head"); if not head then continue end
+        if PlayerDead(p) or PlayerKnocked(p) then continue end
+        local sp, on = Camera:WorldToViewportPoint(head.Position)
+        if not on or sp.Z <= 0 then continue end
+        local d = sqrt((mp.X-sp.X)^2+(mp.Y-sp.Y)^2)
+        if fovOn and d > fovSz then continue end
+        if not CanSee(head) then continue end
+        if d < bd then bd = d; best = p end
+    end
+    return best
+end
+
+-- ============================================================================
+-- ESP
+-- ============================================================================
+local function AddESP(player)
+    if player == LocalPlayer then return end
+    local e = {player = player, nameTag = Drawing.new("Text")}
+    e.nameTag.Size = 14; e.nameTag.Center = true; e.nameTag.Outline = true
+    e.nameTag.OutlineColor = Color3.fromRGB(0,0,0)
+    e.nameTag.Color   = (espCfg["Name"] or {})["Color"]        or Color3.fromRGB(255,255,255)
+    e.nameTag.Visible = false; e.nameTag.ZIndex = 1000
+    ESPLabels[player.UserId] = e
+end
+
+local function RemoveESP(player)
+    local e = ESPLabels[player.UserId]
+    if e then pcall(function() e.nameTag:Remove() end); ESPLabels[player.UserId] = nil end
+end
+
+local function RefreshESP()
+    if not espCfg["Enabled"] then
+        for _, e in pairs(ESPLabels) do e.nameTag.Visible = false end
+        return
+    end
+    for uid, e in pairs(ESPLabels) do
+        local p = e.player
+        if not p or not p.Parent then
+            e.nameTag.Visible = false; pcall(function() e.nameTag:Remove() end)
+            ESPLabels[uid] = nil; continue
+        end
+        if not p.Character or not p.Character:FindFirstChild("HumanoidRootPart") then
+            e.nameTag.Visible = false; continue
+        end
+        local hum = p.Character:FindFirstChildOfClass("Humanoid")
+        if not hum or hum.Health <= 0 then e.nameTag.Visible = false; continue end
+        local lp, on = Camera:WorldToViewportPoint(p.Character.HumanoidRootPart.Position - V3(0,3,0))
+        if on and lp.Z > 0 then
+            e.nameTag.Position = V2(lp.X, lp.Y + 15)
+            local dn = p.DisplayName
+            e.nameTag.Text = (dn and dn ~= "") and dn or p.Name
+            local isTarget = p == CamLockTarget or p == CurrentTarget or p == SelectedTarget
+            e.nameTag.Color = isTarget
+                and ((espCfg["Name"] or {})["Target Color"] or Color3.fromRGB(255,0,0))
+                or  ((espCfg["Name"] or {})["Color"]        or Color3.fromRGB(255,255,255))
+            e.nameTag.Visible = true
+        else e.nameTag.Visible = false end
+    end
+end
+
+for _, p in pairs(Players:GetPlayers()) do if p ~= LocalPlayer then AddESP(p) end end
+Players.PlayerAdded:Connect(function(p)
+    if p ~= LocalPlayer then
+        AddESP(p)
+        p.CharacterAdded:Connect(function() task.wait(0.1); RemoveESP(p); AddESP(p) end)
+    end
+end)
+Players.PlayerRemoving:Connect(RemoveESP)
+
+-- ============================================================================
+-- HUD
+-- ============================================================================
+if (espCfg["HUD"] or {})["Enabled"] ~= false then
+    local sg = Instance.new("ScreenGui")
+    sg.Name = "GloryHUD"; sg.ResetOnSpawn = false
+    sg.ZIndexBehavior = Enum.ZIndexBehavior.Sibling; sg.IgnoreGuiInset = true
+    pcall(function() sg.Parent = game:GetService("CoreGui") end)
+    if not sg.Parent then sg.Parent = LocalPlayer:WaitForChild("PlayerGui") end
+
+    local frame = Instance.new("Frame", sg)
+    frame.Size = UDim2.new(0,160,0,10); frame.Position = UDim2.new(0,8,0,8)
+    frame.BackgroundColor3 = Color3.fromRGB(10,10,16); frame.BackgroundTransparency = 0.35
+    frame.BorderSizePixel = 0
+    Instance.new("UICorner", frame).CornerRadius = UDim.new(0,6)
+    local list = Instance.new("UIListLayout", frame)
+    list.Padding = UDim.new(0,2); list.SortOrder = Enum.SortOrder.LayoutOrder
+    local pad = Instance.new("UIPadding", frame)
+    pad.PaddingLeft = UDim.new(0,6); pad.PaddingTop = UDim.new(0,4); pad.PaddingBottom = UDim.new(0,4)
+
+    local features = (espCfg["HUD"] or {})["Features"] or
+        {"Silent Aim","Camlock","Trigger Bot","Speed","Rapid Fire","0 Spread","Inf Range"}
+    local hudLabels = {}
+    for _, name in ipairs(features) do
+        local lbl = Instance.new("TextLabel", frame)
+        lbl.Size = UDim2.new(1,-6,0,14); lbl.BackgroundTransparency = 1
+        lbl.TextColor3 = Color3.fromRGB(180,180,180); lbl.TextSize = 12
+        lbl.Font = Enum.Font.GothamBold; lbl.TextXAlignment = Enum.TextXAlignment.Left
+        lbl.Text = "● " .. name; hudLabels[name] = lbl
+    end
+    list:GetPropertyChangedSignal("AbsoluteContentSize"):Connect(function()
+        frame.Size = UDim2.new(0,160,0, list.AbsoluteContentSize.Y + 8)
+    end)
+
+    local CON = Color3.fromRGB(100,220,100)
+    local COFF = Color3.fromRGB(180,180,180)
+    RunService.Heartbeat:Connect(function()
+        if hudLabels["Silent Aim"]  then hudLabels["Silent Aim"].TextColor3  = sa["Enabled"]  and CON or COFF end
+        if hudLabels["Camlock"]     then hudLabels["Camlock"].TextColor3      = cl["Enabled"]  and CON or COFF end
+        if hudLabels["Trigger Bot"] then hudLabels["Trigger Bot"].TextColor3  = tb["Enabled"]  and CON or COFF end
+        if hudLabels["Speed"]       then hudLabels["Speed"].TextColor3        = (cm["Speed"] or {})["Enabled"] and CON or COFF end
+        if hudLabels["Rapid Fire"]  then hudLabels["Rapid Fire"].TextColor3   = ((wm["Shoot Modifiers"] or {})["Cooldown Changer"] or {})["Enabled"] and CON or COFF end
+        if hudLabels["0 Spread"]    then hudLabels["0 Spread"].TextColor3     = (wm["Spread Modifiers"] or {})["Enabled"] and CON or COFF end
+        if hudLabels["Inf Range"]   then hudLabels["Inf Range"].TextColor3    = ((wm["Bullet Distance"] or {})["Enabled"]) and CON or COFF end
+    end)
+end
+
+-- ============================================================================
+-- SILENT AIM
+-- ============================================================================
+local function GetSilentAimData()
+    if not sa["Enabled"] then return nil end
+    local target
+    if IS_ACCURACY then
+        target = CamLockTarget or SelectedTarget
+        if not target or not target.Character then return nil end
+        if PlayerDead(target) or PlayerKnocked(target) then return nil end
+        local mp   = UserInputService:GetMouseLocation()
+        local part = GetTargetPart(target.Character, mp) or target.Character:FindFirstChild("HumanoidRootPart")
+        if not part then return nil end
+        local vel  = part.AssemblyLinearVelocity or part.Velocity or V3(0,0,0)
+        local pred = sa["Prediction"] or {}
+        local pos  = part.Position + V3(vel.X*(pred["X"] or 0), vel.Y*(pred["Y"] or 0), vel.Z*(pred["Z"] or 0))
+        return part, pos
+    else
+        if not SilentAimActive then return nil end
+        if not CurrentTarget or not CurrentTarget.Character then return nil end
+        if PlayerDead(CurrentTarget) or PlayerKnocked(CurrentTarget) then return nil end
+        local mp   = UserInputService:GetMouseLocation()
+        local part = GetTargetPart(CurrentTarget.Character, mp) or CurrentTarget.Character:FindFirstChild("HumanoidRootPart")
+        if not part then return nil end
+        return part, GetPredicted(part, CurrentTarget.Character)
+    end
+end
+
+local grm      = getrawmetatable(game)
+local oldIndex = grm.__index
+setreadonly(grm, false)
+grm.__index = function(self, key)
+    if not checkcaller() and self == Mouse then
+        local part, pos = GetSilentAimData()
+        if part and pos then
+            local dir = (pos - Camera.CFrame.Position).Unit
+            if key == "Hit"     then return CF(pos, pos + dir)
+            elseif key == "Target"  then return part
+            elseif key == "UnitRay" then return Ray.new(Camera.CFrame.Position, dir)
+            elseif key == "Origin"  then return Camera.CFrame.Position end
+        end
+    end
+    return oldIndex(self, key)
+end
+setreadonly(grm, true)
+
+local function ShouldRedirect()
+    if not sa["Enabled"] then return false end
+    if IS_ACCURACY then
+        local fb = CamLockTarget or SelectedTarget
+        return fb and fb.Character and not PlayerDead(fb) and not PlayerKnocked(fb)
+    end
+    if not SilentAimActive or not CurrentTarget or not CurrentTarget.Character then return false end
+    return not PlayerDead(CurrentTarget) and not PlayerKnocked(CurrentTarget)
+end
+
+local function RedirectedRay(ray)
+    local _, pos = GetSilentAimData(); if not pos then return ray end
+    return Ray.new(ray.Origin, (pos - ray.Origin).Unit * ray.Direction.Magnitude)
+end
+
+local oldFPOR, oldFPORWI, oldRC
+pcall(function()
+    oldFPOR = hookfunction(Workspace.FindPartOnRay, function(self, ray, ...)
+        if not checkcaller() and ShouldRedirect() then ray = RedirectedRay(ray) end
+        return oldFPOR(self, ray, ...)
+    end)
+end)
+pcall(function()
+    oldFPORWI = hookfunction(Workspace.FindPartOnRayWithIgnoreList, function(self, ray, il, ...)
+        if not checkcaller() and ShouldRedirect() then ray = RedirectedRay(ray) end
+        return oldFPORWI(self, ray, il, ...)
+    end)
+end)
+pcall(function()
+    oldRC = hookfunction(Workspace.Raycast, function(self, origin, dir, params)
+        if not checkcaller() and ShouldRedirect() then
+            if (origin - Camera.CFrame.Position).Magnitude < 15 then
+                local _, pos = GetSilentAimData()
+                if pos then
+                    local nd = pos - origin
+                    dir = nd.Unit * max(dir.Magnitude, nd.Magnitude)
+                end
+            end
+        end
+        return oldRC(self, origin, dir, params)
+    end)
+end)
+pcall(function()
+    local RS = game:GetService("ReplicatedStorage")
+    local GH = require(RS.Modules.GunHandler)
+    local orig = GH.getAim
+    GH.getAim = function(origin, range)
+        if sa["Enabled"] and ShouldRedirect() then
+            local mp = UserInputService:GetMouseLocation()
+            local best, bd = nil, huge
+            for _, p in pairs(Players:GetPlayers()) do
+                if p == LocalPlayer or not p.Character then continue end
+                local head = p.Character:FindFirstChild("Head")
+                if not head or PlayerDead(p) or PlayerKnocked(p) then continue end
+                local sp, on = Camera:WorldToViewportPoint(head.Position)
+                if not on or sp.Z <= 0 then continue end
+                local d = sqrt((sp.X-mp.X)^2+(sp.Y-mp.Y)^2)
+                if d < bd then bd = d; best = head end
+            end
+            if best then local dir = best.Position - origin; return dir.Unit, math.min(dir.Magnitude, range) end
+        end
+        return orig(origin, range)
+    end
+end)
+
+-- ============================================================================
+-- TARGET LOOP
+-- ============================================================================
+local function UpdateTarget()
+    if not SilentAimActive or IsChatOpen() then
+        if sa["Selection"] == "Automatic" then CurrentTarget = nil end
+        return
+    end
+    if sa["Selection"] == "Target" then
+        if SelectedTarget then
+            if not SelectedTarget.Character or PlayerDead(SelectedTarget) or PlayerKnocked(SelectedTarget) then
+                SelectedTarget = nil; CurrentTarget = nil; SilentAimActive = false
+            else CurrentTarget = SelectedTarget end
+        else CurrentTarget = nil end
+    else
+        if sa["StickyAim"] and CurrentTarget then
+            if CurrentTarget.Character and not PlayerDead(CurrentTarget) and not PlayerKnocked(CurrentTarget) then return end
+            CurrentTarget = nil
+        end
+        CurrentTarget = FindClosestToMouse()
+    end
+end
+
+-- ============================================================================
+-- INPUT
+-- ============================================================================
+UserInputService.InputBegan:Connect(function(input, processed)
+    if processed then return end
+    local k = input.KeyCode.Name
+
+    -- Silent Aim
+    local saKey = keybinds["Silent Target"] or "C"
+    if k == saKey then
+        if sa["Selection"] == "Target" then
+            if SelectedTarget then SelectedTarget = nil; CurrentTarget = nil; SilentAimActive = false
+            else
+                local t = FindClosestToMouse(true)
+                if t then SelectedTarget = t; CurrentTarget = t; SilentAimActive = true end
+            end
+        else
+            SilentAimActive = not SilentAimActive
+            if not SilentAimActive then CurrentTarget = nil end
+        end
+    end
+
+    -- Speed
+    if (cm["Speed"] or {})["Enabled"] and k == (keybinds["Speed"] or "V") then
+        local hum = LocalPlayer.Character and LocalPlayer.Character:FindFirstChildOfClass("Humanoid")
+        if hum then
+            if not SpeedEnabled then BaseSpeed = 16; SpeedEnabled = true
+            else hum.WalkSpeed = BaseSpeed; SpeedEnabled = false end
+        end
+    end
+
+    -- Trigger Bot
+    local tbKey = keybinds["Trigger Bot"] or "V"
+    if k == tbKey then
+        local mode = ((tb["Activation"] or {})["Type"] or "Toggle")
+        if mode == "Toggle" then TriggerBotActive = not TriggerBotActive
+        else TriggerBotActive = true end
+    end
+
+    -- Jump
+    if (cm["Jump"] or {})["Enabled"] and k == (keybinds["Jump"] or "Y") then
+        SuperJumpActive = not SuperJumpActive
+    end
+
+    -- Mouse down
+    if input.UserInputType == Enum.UserInputType.MouseButton1 then isMouseDown = true end
+end)
+
+UserInputService.InputEnded:Connect(function(input, processed)
+    if processed then return end
+    local k = input.KeyCode.Name
+    local tbKey = keybinds["Trigger Bot"] or "V"
+    if k == tbKey and ((tb["Activation"] or {})["Type"] or "Toggle") == "Hold" then
+        TriggerBotActive = false
+    end
+    if input.UserInputType == Enum.UserInputType.MouseButton1 then isMouseDown = false end
+end)
+
+-- ============================================================================
+-- TRIGGER BOT
+-- ============================================================================
+local function RunTriggerBot()
+    if not tb["Enabled"] or not TriggerBotActive then return end
+    if tick() - LastTriggerShot < (tb["Delay"] or 0) then return end
+    if not CurrentTarget or not CurrentTarget.Character then return end
+    if PlayerDead(CurrentTarget) or PlayerKnocked(CurrentTarget) then return end
+    local tool = LocalPlayer.Character and LocalPlayer.Character:FindFirstChildOfClass("Tool")
+    if not tool then return end
+    tool:Activate(); LastTriggerShot = tick()
+end
+
+-- ============================================================================
+-- RAPID FIRE
+-- ============================================================================
+local shootMods = wm["Shoot Modifiers"] or {}
+local cdChanger = shootMods["Cooldown Changer"] or {}
+if cdChanger["Enabled"] then
+    task.spawn(function()
+        while true do
+            if isMouseDown then
+                local char = LocalPlayer.Character
+                local tool = char and char:FindFirstChildOfClass("Tool")
+                if tool then tool:Activate() end
+            end
+            task.wait(0.001)
+        end
+    end)
+end
+
+-- ============================================================================
+-- 0 SPREAD
+-- ============================================================================
+local spreadMods = wm["Spread Modifiers"] or {}
+if spreadMods["Enabled"] then
+    local oldRandom
+    pcall(function()
+        oldRandom = hookfunction(math.random, function(...)
+            if checkcaller() then return oldRandom(...) end
+            local a = {...}
+            if #a == 0 or (a[1] == -0.05 and a[2] == 0.05) or a[1] == -0.1 or a[1] == -0.05 then
+                return 0
+            end
+            return oldRandom(...)
+        end)
+    end)
+end
+
+-- ============================================================================
+-- CAMERA LOCK
+-- ============================================================================
+local CLFov = Drawing.new("Circle")
+CLFov.Filled = false; CLFov.Transparency = 1; CLFov.Thickness = 1
+CLFov.Color = Color3.fromRGB(255,255,0); CLFov.NumSides = 1000; CLFov.Visible = false
+
+local function CLPrediction()
+    if not cl["FOV"] then return 0.15038 end
+    local ping = GetPing() * 1000
+    if ping < 40  then return 0.145
+    elseif ping < 80  then return 0.133
+    elseif ping < 120 then return 0.120
+    elseif ping < 160 then return 0.18
+    elseif ping < 205 then return 1.0
+    else return 1.4 end
+end
+
+local function CLGetClosest()
+    local fov = cl["FOV"] or {}
+    local fovOn = fov["Enabled"]
+    local fovSz = fovOn and (clFOVSize and clFOVSize() or 55) * 2 or huge
+    -- read size from config
+    if fovOn then
+        local t = fov["Type"] or "3D"
+        if t == "2D" then fovSz = ((fov["2D"] or {})["X"] or 20) * 2
+        else fovSz = ((fov["3D"] or {})["X"] or 9) * 2 end
+    end
+    local mouse = LocalPlayer:GetMouse()
+    local best, bd = nil, huge
+    for _, v in pairs(Players:GetPlayers()) do
+        if v == LocalPlayer or not v.Character then continue end
+        local hum = v.Character:FindFirstChildOfClass("Humanoid")
+        if not hum or hum.Health <= 0 then continue end
+        local pp = v.Character.PrimaryPart; if not pp then continue end
+        if PlayerDead(v) or PlayerKnocked(v) then continue end
+        local sp = Camera:WorldToViewportPoint(pp.Position)
+        local d  = (V2(sp.X, sp.Y) - V2(mouse.X, mouse.Y)).Magnitude
+        if fovOn and d > fovSz then continue end
+        if d < bd then bd = d; best = v end
+    end
+    return best
+end
+
+local clMouse = LocalPlayer:GetMouse()
+clMouse.KeyDown:Connect(function(k)
+    if not cl["Enabled"] then return end
+    local key = (keybinds["Camlock Target"] or "C"):lower()
+    if k:lower() ~= key then return end
+    if CamLockActive then CamLockActive = false; CamLockTarget = nil
+    else
+        if CamLockTarget then CamLockActive = true
+        else CamLockTarget = CLGetClosest(); CamLockActive = CamLockTarget ~= nil end
+    end
+end)
+
+RunService:BindToRenderStep("GloryCamLock", Enum.RenderPriority.Camera.Value + 1, function()
+    if not cl["Enabled"] then return end
+    local fov = cl["FOV"] or {}
+    local mouse = LocalPlayer:GetMouse()
+    if fov["Enabled"] and fov["Show FOV"] and CamLockActive then
+        local sz = fov["Type"] == "2D" and ((fov["2D"] or {})["X"] or 20) or ((fov["3D"] or {})["X"] or 9)
+        CLFov.Radius = sz * 2; CLFov.Position = V2(mouse.X, mouse.Y); CLFov.Visible = true
+    else CLFov.Visible = false end
+
+    if not CamLockActive or not CamLockTarget then return end
+    if not CamLockTarget.Character then CamLockTarget = nil; CamLockActive = false; return end
+    local hum = CamLockTarget.Character:FindFirstChildOfClass("Humanoid")
+    if not hum or hum.Health <= 0 then CamLockTarget = nil; CamLockActive = false; return end
+    local aimPart = CamLockTarget.Character:FindFirstChild("HumanoidRootPart"); if not aimPart then return end
+    local vel = aimPart.Velocity or V3(0,0,0)
+    local targetPos = aimPart.Position + vel * CLPrediction()
+    local targetCF  = CF(Camera.CFrame.Position, targetPos)
+    local smooth = (cl["Smoothness"] or {})["X"] or 0.04
+    Camera.CFrame = smooth > 0 and Camera.CFrame:Lerp(targetCF, clamp(1 - smooth, 0.01, 0.99)) or targetCF
+end)
+
+-- ============================================================================
+-- MAIN HEARTBEAT
+-- ============================================================================
+RunService.Heartbeat:Connect(function()
+    UpdateTarget()
+    RunTriggerBot()
+    RefreshESP()
+
+    -- Speed
+    local spd = cm["Speed"] or {}
+    if spd["Enabled"] and SpeedEnabled then
+        local char = LocalPlayer.Character
+        local hum  = char and char:FindFirstChildOfClass("Humanoid")
+        local hrp  = char and char:FindFirstChild("HumanoidRootPart")
+        if hum then
+            local cond = spd["Conditions"] or {}
+            local mult = (cond["Normal"] or {})["Multiplier"] or 2.5
+            if hum.WalkSpeed ~= BaseSpeed * mult then hum.WalkSpeed = BaseSpeed * mult end
+        end
+        if cm["Anti Fling"] ~= false and hrp then
+            local vel = hrp.AssemblyLinearVelocity or hrp.Velocity
+            if abs(vel.Y) > 50 then hrp.AssemblyLinearVelocity = V3(vel.X, 0, vel.Z) end
+        end
+    elseif not SpeedEnabled then
+        local hum = LocalPlayer.Character and LocalPlayer.Character:FindFirstChildOfClass("Humanoid")
+        if hum and hum.WalkSpeed ~= 16 then hum.WalkSpeed = 16 end
+    end
+
+    -- Super Jump
+    local jmp = cm["Jump"] or {}
+    if jmp["Enabled"] and SuperJumpActive then
+        local char = LocalPlayer.Character
+        local hum  = char and char:FindFirstChildOfClass("Humanoid")
+        local hrp  = char and char:FindFirstChild("HumanoidRootPart")
+        if hum and hrp and not SuperJumpCooldown then
+            if hum:GetState() == Enum.HumanoidStateType.Landed or hum.FloorMaterial ~= Enum.Material.Air then
+                SuperJumpCooldown = true
+                local mult = ((jmp["Conditions"] or {})["Normal"] or {})["Multiplier"] or 4
+                hrp.AssemblyLinearVelocity = V3(hrp.AssemblyLinearVelocity.X, mult * 100, hrp.AssemblyLinearVelocity.Z)
+                task.delay(0.1, function() SuperJumpCooldown = false end)
+            end
+        end
+    end
+
+    -- Target tracer
+    if CurrentTarget and CurrentTarget.Character then
+        local head = CurrentTarget.Character:FindFirstChild("Head")
+        if head and not PlayerDead(CurrentTarget) then
+            local hp, on = Camera:WorldToViewportPoint(head.Position)
+            if on and hp.Z > 0 then
+                local mp = UserInputService:GetMouseLocation()
+                TargetTracer.From = V2(mp.X, mp.Y); TargetTracer.To = V2(hp.X, hp.Y)
+                TargetTracer.Visible = SilentAimActive
+            else TargetTracer.Visible = false end
+        else TargetTracer.Visible = false end
+    else TargetTracer.Visible = false end
+end)
