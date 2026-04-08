@@ -1,25 +1,25 @@
--- logic.lua | Glory Engine
--- This file goes on GitHub. It reads getgenv()["Glory"] set by the user's config.lua
+-- logic.lua | Vanta Engine
+-- This file goes on GitHub. It reads getgenv()["Vanta"] set by the user's config.lua
 
-local glory = getgenv()["Glory"]
-assert(glory, "[Glory] Config not found. Run config.lua first.")
+local Vanta = getgenv()["Vanta"]
+assert(Vanta, "[Vanta] Config not found. Run config.lua first.")
 
-local core     = glory["Core"]                or {}
+local core     = Vanta["Core"]                or {}
 local checks   = core["Checks"]               or {}
 local keybinds = core["Keybinds"]             or {}
-local sa       = glory["Silent Aim"]          or {}
-local cl       = glory["Camlock"]             or {}
-local tb       = glory["Trigger Bot"]         or {}
-local espCfg   = glory["ESP"]                 or {}
-local cm       = glory["Character Modifiers"] or {}
-local wm       = glory["Weapon Modifiers"]    or {}
+local sa       = Vanta["Silent Aim"]          or {}
+local cl       = Vanta["Camlock"]             or {}
+local tb       = Vanta["Trigger Bot"]         or {}
+local espCfg   = Vanta["ESP"]                 or {}
+local cm       = Vanta["Character Modifiers"] or {}
+local wm       = Vanta["Weapon Modifiers"]    or {}
 
 -- ============================================================================
 -- KEY SYSTEM
 -- ============================================================================
 do
     local userKey = tostring(core["Script Key"] or "")
-    assert(userKey ~= "", "[Glory] No key set in config.")
+    assert(userKey ~= "", "[Vanta] No key set in config.")
 
     local hwid = tostring(game:GetService("RbxAnalyticsService"):GetClientId())
     local API  = "https://bypass-production-954a.up.railway.app/check"
@@ -39,7 +39,7 @@ do
     end
 
     if not valid then
-        game:GetService("Players").LocalPlayer:Kick("Glory — " .. reason)
+        game:GetService("Players").LocalPlayer:Kick("Vanta — " .. reason)
         return
     end
 end
@@ -282,7 +282,7 @@ Players.PlayerRemoving:Connect(RemoveESP)
 -- ============================================================================
 if (espCfg["HUD"] or {})["Enabled"] ~= false then
     local sg = Instance.new("ScreenGui")
-    sg.Name = "GloryHUD"; sg.ResetOnSpawn = false
+    sg.Name = "VantaHUD"; sg.ResetOnSpawn = false
     sg.ZIndexBehavior = Enum.ZIndexBehavior.Sibling; sg.IgnoreGuiInset = true
     pcall(function() sg.Parent = game:GetService("CoreGui") end)
     if not sg.Parent then sg.Parent = LocalPlayer:WaitForChild("PlayerGui") end
@@ -630,7 +630,7 @@ clMouse.KeyDown:Connect(function(k)
     end
 end)
 
-RunService:BindToRenderStep("GloryCamLock", Enum.RenderPriority.Camera.Value + 1, function()
+RunService:BindToRenderStep("VantaCamLock", Enum.RenderPriority.Camera.Value + 1, function()
     if not cl["Enabled"] then return end
     local fov = cl["FOV"] or {}
     local mouse = LocalPlayer:GetMouse()
