@@ -289,7 +289,7 @@ if (espCfg["HUD"] or {})["Enabled"] ~= false then
 
     local frame = Instance.new("Frame", sg)
     frame.Size = UDim2.new(0,160,0,10)
-    frame.Position = UDim2.new(0, 8, 1, -140)  -- bottom-left, a little up from the edge
+    frame.Position = UDim2.new(0.5, -80, 1, -140)  -- center-bottom
     frame.BackgroundColor3 = Color3.fromRGB(10,10,16)
     frame.BackgroundTransparency = 0.35
     frame.BorderSizePixel = 0
@@ -301,14 +301,14 @@ if (espCfg["HUD"] or {})["Enabled"] ~= false then
 
     -- auto-detect features from config
     local featureDefs = {
-        { "Silent Aim",  function() return sa["Enabled"] end },
-        { "Camlock",     function() return cl["Enabled"] end },
-        { "Trigger Bot", function() return tb["Enabled"] end },
-        { "Speed",       function() return (cm["Speed"] or {})["Enabled"] end },
-        { "Rapid Fire",  function() return ((wm["Shoot Modifiers"] or {})["Cooldown Changer"] or {})["Enabled"] end },
-        { "0 Spread",    function() return (wm["Spread Modifiers"] or {})["Enabled"] end },
-        { "Inf Range",   function() return (wm["Bullet Distance"] or {})["Enabled"] end },
-        { "Super Jump",  function() return (cm["Jump"] or {})["Enabled"] end },
+        { "Silent Aim",  function() return sa["Enabled"] end,                                                          function() return SilentAimActive end },
+        { "Camlock",     function() return cl["Enabled"] end,                                                          function() return CamLockActive end },
+        { "Trigger Bot", function() return tb["Enabled"] end,                                                          function() return TriggerBotActive end },
+        { "Speed",       function() return (cm["Speed"] or {})["Enabled"] end,                                         function() return SpeedEnabled end },
+        { "Rapid Fire",  function() return ((wm["Shoot Modifiers"] or {})["Cooldown Changer"] or {})["Enabled"] end,   function() return isMouseDown end },
+        { "0 Spread",    function() return (wm["Spread Modifiers"] or {})["Enabled"] end,                              function() return true end },
+        { "Inf Range",   function() return (wm["Bullet Distance"] or {})["Enabled"] end,                               function() return true end },
+        { "Super Jump",  function() return (cm["Jump"] or {})["Enabled"] end,                                          function() return SuperJumpActive end },
     }
 
     local hudLabels = {}
@@ -316,9 +316,9 @@ if (espCfg["HUD"] or {})["Enabled"] ~= false then
         if def[2]() then  -- only add label if enabled in config
             local lbl = Instance.new("TextLabel", frame)
             lbl.Size = UDim2.new(1,-6,0,14); lbl.BackgroundTransparency = 1
-            lbl.TextColor3 = Color3.fromRGB(180,180,180); lbl.TextSize = 12
-            lbl.Font = Enum.Font.GothamBold; lbl.TextXAlignment = Enum.TextXAlignment.Left
-            lbl.Text = "● " .. def[1]
+            lbl.TextColor3 = Color3.fromRGB(120,120,120); lbl.TextSize = 12
+            lbl.Font = Enum.Font.GothamBold; lbl.TextXAlignment = Enum.TextXAlignment.Center
+            lbl.Text = def[1]
             hudLabels[def[1]] = lbl
         end
     end
@@ -328,11 +328,11 @@ if (espCfg["HUD"] or {})["Enabled"] ~= false then
     end)
 
     local CON  = Color3.fromRGB(100,220,100)
-    local COFF = Color3.fromRGB(180,180,180)
+    local COFF = Color3.fromRGB(120,120,120)
     RunService.Heartbeat:Connect(function()
         for _, def in ipairs(featureDefs) do
             local lbl = hudLabels[def[1]]
-            if lbl then lbl.TextColor3 = def[2]() and CON or COFF end
+            if lbl then lbl.TextColor3 = def[3]() and CON or COFF end
         end
     end)
 end
