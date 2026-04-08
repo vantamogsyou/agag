@@ -226,9 +226,8 @@ end
 local function AddESP(player)
     if player == LocalPlayer then return end
     local e = {player = player, nameTag = Drawing.new("Text")}
-    e.nameTag.Size = 14; e.nameTag.Center = true; e.nameTag.Outline = true
+    e.nameTag.Size = 14; e.nameTag.Center = true; e.nameTag.Outline = false
     e.nameTag.Font = Drawing.Fonts.UI
-    e.nameTag.OutlineColor = Color3.fromRGB(0,0,0)
     e.nameTag.Color   = (espCfg["Name"] or {})["Color"]        or Color3.fromRGB(255,255,255)
     e.nameTag.Visible = false; e.nameTag.ZIndex = 1000
     ESPLabels[player.UserId] = e
