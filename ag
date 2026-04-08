@@ -18,40 +18,30 @@ local wm       = glory["Weapon Modifiers"]    or {}
 -- KEY SYSTEM
 -- ============================================================================
 do
-    local Http    = game:GetService("HttpService")
     local userKey = tostring(core["Script Key"] or "")
     assert(userKey ~= "", "[Glory] No key set in config.")
 
-    local function getHWID()
-        if gethwid then local ok, id = pcall(gethwid); if ok and id ~= "" then return tostring(id) end end
-        local ok, id = pcall(function() return game:GetService("RbxAnalyticsService"):GetClientId() end)
-        if ok and id ~= "" then return tostring(id) end
-        return "unknown-" .. tostring(game.PlaceId)
+    local hwid = tostring(game:GetService("RbxAnalyticsService"):GetClientId())
+    local API  = "https://bypass-production-954a.up.railway.app/check"
+
+    local ok, res = pcall(function()
+        return game:HttpGet(API .. "?key=" .. userKey .. "&hwid=" .. hwid)
+    end)
+
+    local valid  = false
+    local reason = "Invalid key"
+    if ok and res then
+        pcall(function()
+            local data = game:GetService("HttpService"):JSONDecode(res)
+            valid  = data.valid
+            reason = data.reason or reason
+        end)
     end
 
-    local name    = "Glory"
-    local ownerid = "QjVh1EVVyn"
-    local version = "1.0"
-    local hwid    = getHWID()
-
-    local ok, res = pcall(request, {
-        Url = "https://keyauth.win/api/1.2/", Method = "POST",
-        Headers = {["Content-Type"] = "application/x-www-form-urlencoded"},
-        Body = "type=init&ver="..version.."&name="..Http:UrlEncode(name).."&ownerid="..ownerid,
-    })
-    assert(ok and res, "[Glory] KeyAuth init failed.")
-    local initData; pcall(function() initData = Http:JSONDecode(res.Body) end)
-    assert(initData and initData.sessionid, "[Glory] KeyAuth init error: "..(initData and initData.message or "no response"))
-
-    local ok2, res2 = pcall(request, {
-        Url = "https://keyauth.win/api/1.2/", Method = "POST",
-        Headers = {["Content-Type"] = "application/x-www-form-urlencoded"},
-        Body = "type=license&key="..Http:UrlEncode(userKey).."&hwid="..Http:UrlEncode(hwid)
-             .."&sessionid="..initData.sessionid.."&name="..Http:UrlEncode(name).."&ownerid="..ownerid,
-    })
-    assert(ok2 and res2, "[Glory] Key check failed.")
-    local authData; pcall(function() authData = Http:JSONDecode(res2.Body) end)
-    assert(authData and authData.success, "[Glory] "..(authData and authData.message or "Invalid key."))
+    if not valid then
+        game:GetService("Players").LocalPlayer:Kick("Glory — " .. reason)
+        return
+    end
 end
 
 -- ============================================================================
