@@ -226,7 +226,7 @@ end
 local function AddESP(player)
     if player == LocalPlayer then return end
     local e = {player = player, nameTag = Drawing.new("Text")}
-    e.nameTag.Size = 14; e.nameTag.Center = true; e.nameTag.Outline = false
+    e.nameTag.Size = 14; e.nameTag.Center = true; e.nameTag.Outline = true
     e.nameTag.Font = Drawing.Fonts.UI
     e.nameTag.Color   = (espCfg["Name"] or {})["Color"]        or Color3.fromRGB(255,255,255)
     e.nameTag.Visible = false; e.nameTag.ZIndex = 1000
@@ -283,7 +283,7 @@ Players.PlayerRemoving:Connect(RemoveESP)
 -- Drawing-based HUD: no background, centered, Vanta.cc title + active features
 do
     local HUD_X     = Camera.ViewportSize.X / 2  -- centered horizontally
-    local HUD_Y     = 60                          -- distance from top
+    local HUD_Y_OFF = 80                          -- distance from bottom
     local LINE_H    = 22
     local WHITE     = Color3.fromRGB(255, 255, 255)
     local GREEN     = Color3.fromRGB(100, 220, 60)
@@ -299,7 +299,7 @@ do
     titleDraw.Center      = true
     titleDraw.Visible     = true
     titleDraw.ZIndex      = 10
-    titleDraw.Position    = V2(HUD_X, HUD_Y)
+    titleDraw.Position    = V2(HUD_X, Camera.ViewportSize.Y - HUD_Y_OFF)
 
     -- pool of feature line drawings (max 10)
     local linePool = {}
@@ -335,8 +335,9 @@ do
         end
 
         -- update HUD_X in case viewport resized
-        local cx = Camera.ViewportSize.X / 2
-        titleDraw.Position = V2(cx, HUD_Y)
+        local cx  = Camera.ViewportSize.X / 2
+        local bot = Camera.ViewportSize.Y - HUD_Y_OFF
+        titleDraw.Position = V2(cx, bot)
         titleDraw.Visible  = true
 
         local row = 0
@@ -349,7 +350,7 @@ do
                 if not d then break end
                 d.Text     = label
                 d.Color    = WHITE
-                d.Position = V2(cx, HUD_Y + LINE_H * row)
+                d.Position = V2(cx, bot + LINE_H * row)
                 d.Visible  = true
             end
         end
