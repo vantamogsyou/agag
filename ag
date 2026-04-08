@@ -307,7 +307,7 @@ if (espCfg["HUD"] or {})["Enabled"] ~= false then
         { "Speed",       function() return (cm["Speed"] or {})["Enabled"] end,                                         function() return SpeedEnabled end },
         { "Rapid Fire",  function() return ((wm["Shoot Modifiers"] or {})["Cooldown Changer"] or {})["Enabled"] end,   function() return isMouseDown end },
         { "0 Spread",    function() return (wm["Spread Modifiers"] or {})["Enabled"] end,                              function() return true end },
-        { "Inf Range",   function() return (wm["Bullet Distance"] or {})["Enabled"] end,                               function() return true end },
+        { "Inf Range",   function() return (wm["Bullet Distance"] or {})["Enabled"] end,                               function() return InfRangeActive end },
         { "Super Jump",  function() return (cm["Jump"] or {})["Enabled"] end,                                          function() return SuperJumpActive end },
     }
 
@@ -543,22 +543,17 @@ local function RunTriggerBot()
 end
 
 -- ============================================================================
--- RAPID FIRE
+-- INFINITE RANGE — toggle via keybind
 -- ============================================================================
-local shootMods = wm["Shoot Modifiers"] or {}
-local cdChanger = shootMods["Cooldown Changer"] or {}
-if cdChanger["Enabled"] then
-    task.spawn(function()
-        while true do
-            if isMouseDown then
-                local char = LocalPlayer.Character
-                local tool = char and char:FindFirstChildOfClass("Tool")
-                if tool then tool:Activate() end
-            end
-            task.wait(0.001)
-        end
-    end)
-end
+local InfRangeActive = (wm["Bullet Distance"] or {})["Enabled"] or false
+
+UserInputService.InputBegan:Connect(function(input, processed)
+    if processed then return end
+    local irKey = keybinds["Inf Range"] or "N"
+    if input.KeyCode.Name == irKey and (wm["Bullet Distance"] or {})["Enabled"] then
+        InfRangeActive = not InfRangeActive
+    end
+end)
 
 -- ============================================================================
 -- 0 SPREAD
@@ -571,7 +566,8 @@ if spreadMods["Enabled"] then
             if checkcaller() then return oldRandom(...) end
             local a = {...}
             if #a == 0 or (a[1] == -0.05 and a[2] == 0.05) or a[1] == -0.1 or a[1] == -0.05 then
-                return 0
+                local amt = (spreadMods["Amount"] or 0) / 100
+                return oldRandom(...) * amt
             end
             return oldRandom(...)
         end)
@@ -711,4 +707,19 @@ RunService.Heartbeat:Connect(function()
             else TargetTracer.Visible = false end
         else TargetTracer.Visible = false end
     else TargetTracer.Visible = false end
+
+    -- Infinite Range
+    if InfRangeActive then
+        local char = LocalPlayer.Character
+        local tool = char and char:FindFirstChildOfClass("Tool")
+        if tool then
+            local range = (wm["Bullet Distance"] or {})["Range"] or 900000000
+            for _, prop in ipairs({"Range","MaxRange","FireRange","Distance","MaxDistance"}) do
+                local v = tool:FindFirstChild(prop)
+                if v and (v:IsA("NumberValue") or v:IsA("IntValue")) then v.Value = range end
+                local gc = tool:FindFirstChild("Configuration") or tool:FindFirstChild("GunConfig")
+                if gc then local r = gc:FindFirstChild(prop); if r then r.Value = range end end
+            end
+        end
+    end
 end)
