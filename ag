@@ -280,47 +280,84 @@ Players.PlayerRemoving:Connect(RemoveESP)
 -- ============================================================================
 -- HUD
 -- ============================================================================
-if (espCfg["HUD"] or {})["Enabled"] ~= false then
-    local sg = Instance.new("ScreenGui")
-    sg.Name = "GloryHUD"; sg.ResetOnSpawn = false
-    sg.ZIndexBehavior = Enum.ZIndexBehavior.Sibling; sg.IgnoreGuiInset = true
-    pcall(function() sg.Parent = game:GetService("CoreGui") end)
-    if not sg.Parent then sg.Parent = LocalPlayer:WaitForChild("PlayerGui") end
+-- Drawing-based HUD: no background, centered, Vanta.cc title + active features
+do
+    local HUD_X     = Camera.ViewportSize.X / 2  -- centered horizontally
+    local HUD_Y     = 60                          -- distance from top
+    local LINE_H    = 22
+    local WHITE     = Color3.fromRGB(255, 255, 255)
+    local GREEN     = Color3.fromRGB(100, 220, 60)
+    local FONT      = Drawing.Fonts.UI
 
-    local frame = Instance.new("Frame", sg)
-    frame.Size = UDim2.new(0,160,0,10); frame.Position = UDim2.new(0,8,0,8)
-    frame.BackgroundColor3 = Color3.fromRGB(10,10,16); frame.BackgroundTransparency = 0.35
-    frame.BorderSizePixel = 0
-    Instance.new("UICorner", frame).CornerRadius = UDim.new(0,6)
-    local list = Instance.new("UIListLayout", frame)
-    list.Padding = UDim.new(0,2); list.SortOrder = Enum.SortOrder.LayoutOrder
-    local pad = Instance.new("UIPadding", frame)
-    pad.PaddingLeft = UDim.new(0,6); pad.PaddingTop = UDim.new(0,4); pad.PaddingBottom = UDim.new(0,4)
+    -- title label
+    local titleDraw = Drawing.new("Text")
+    titleDraw.Text        = "Vanta.cc"
+    titleDraw.Size        = 16
+    titleDraw.Font        = FONT
+    titleDraw.Color       = WHITE
+    titleDraw.Outline     = false
+    titleDraw.Center      = true
+    titleDraw.Visible     = true
+    titleDraw.ZIndex      = 10
+    titleDraw.Position    = V2(HUD_X, HUD_Y)
 
-    local features = (espCfg["HUD"] or {})["Features"] or
-        {"Silent Aim","Camlock","Trigger Bot","Speed","Rapid Fire","0 Spread","Inf Range"}
-    local hudLabels = {}
-    for _, name in ipairs(features) do
-        local lbl = Instance.new("TextLabel", frame)
-        lbl.Size = UDim2.new(1,-6,0,14); lbl.BackgroundTransparency = 1
-        lbl.TextColor3 = Color3.fromRGB(180,180,180); lbl.TextSize = 12
-        lbl.Font = Enum.Font.GothamBold; lbl.TextXAlignment = Enum.TextXAlignment.Left
-        lbl.Text = "● " .. name; hudLabels[name] = lbl
+    -- pool of feature line drawings (max 10)
+    local linePool = {}
+    for i = 1, 10 do
+        local d = Drawing.new("Text")
+        d.Size    = 15
+        d.Font    = FONT
+        d.Outline = false
+        d.Center  = true
+        d.Visible = false
+        d.ZIndex  = 10
+        linePool[i] = d
     end
-    list:GetPropertyChangedSignal("AbsoluteContentSize"):Connect(function()
-        frame.Size = UDim2.new(0,160,0, list.AbsoluteContentSize.Y + 8)
-    end)
 
-    local CON = Color3.fromRGB(100,220,100)
-    local COFF = Color3.fromRGB(180,180,180)
+    -- which features to show and how to check if they're on
+    -- { label, isEnabled() }
+    local featureDefs = {
+        { "Silent Aim",  function() return sa["Enabled"] end },
+        { "Camlock",     function() return cl["Enabled"] end },
+        { "Trigger Bot", function() return tb["Enabled"] end },
+        { "WalkSpeed",   function() return (cm["Speed"] or {})["Enabled"] end },
+        { "Rapid Fire",  function() return ((wm["Shoot Modifiers"] or {})["Cooldown Changer"] or {})["Enabled"] end },
+        { "0 Spread",    function() return (wm["Spread Modifiers"] or {})["Enabled"] end },
+        { "Inf Range",   function() return (wm["Bullet Distance"] or {})["Enabled"] end },
+        { "Super Jump",  function() return (cm["Jump"] or {})["Enabled"] end },
+    }
+
     RunService.Heartbeat:Connect(function()
-        if hudLabels["Silent Aim"]  then hudLabels["Silent Aim"].TextColor3  = sa["Enabled"]  and CON or COFF end
-        if hudLabels["Camlock"]     then hudLabels["Camlock"].TextColor3      = cl["Enabled"]  and CON or COFF end
-        if hudLabels["Trigger Bot"] then hudLabels["Trigger Bot"].TextColor3  = tb["Enabled"]  and CON or COFF end
-        if hudLabels["Speed"]       then hudLabels["Speed"].TextColor3        = (cm["Speed"] or {})["Enabled"] and CON or COFF end
-        if hudLabels["Rapid Fire"]  then hudLabels["Rapid Fire"].TextColor3   = ((wm["Shoot Modifiers"] or {})["Cooldown Changer"] or {})["Enabled"] and CON or COFF end
-        if hudLabels["0 Spread"]    then hudLabels["0 Spread"].TextColor3     = (wm["Spread Modifiers"] or {})["Enabled"] and CON or COFF end
-        if hudLabels["Inf Range"]   then hudLabels["Inf Range"].TextColor3    = ((wm["Bullet Distance"] or {})["Enabled"]) and CON or COFF end
+        if (espCfg["HUD"] or {})["Enabled"] == false then
+            titleDraw.Visible = false
+            for _, d in ipairs(linePool) do d.Visible = false end
+            return
+        end
+
+        -- update HUD_X in case viewport resized
+        local cx = Camera.ViewportSize.X / 2
+        titleDraw.Position = V2(cx, HUD_Y)
+        titleDraw.Visible  = true
+
+        local row = 0
+        for _, def in ipairs(featureDefs) do
+            local label, check = def[1], def[2]
+            local on = check()
+            if on then
+                row = row + 1
+                local d = linePool[row]
+                if not d then break end
+                d.Text     = label
+                d.Color    = WHITE
+                d.Position = V2(cx, HUD_Y + LINE_H * row)
+                d.Visible  = true
+            end
+        end
+
+        -- hide unused lines
+        for i = row + 1, #linePool do
+            linePool[i].Visible = false
+        end
     end)
 end
 
